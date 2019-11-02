@@ -1,0 +1,236 @@
+#Candice's Guide
+
+
+
+#For resampling the ITRAX for parallel analyses done on subsampled material
+
+#Resample ITRAX profile at n interval (mm)
+Resample.strat <- function(d,n) {
+  steps = seq(0, ceiling(max(d$Position/10))*10, by=n)
+  b <- data.frame(stringsAsFactors = FALSE)
+  x=2
+  repeat {
+    d1 <- subset(d, Position <= steps[x] & Position > steps[x-1]) 
+    d2 <- colMeans(d1[,c(2:ncol(d1))])
+    d3 <- bind_rows(d2, .id = "column_label")
+    d3 <- data.frame(unique(d$CoreID), steps[x], d3)
+    b <- rbind(b,d3) 
+    x = x+1
+    #Stop loop
+    if (x == length(steps)+1){
+      return(b)
+    }
+  }
+}
+#Compute the midpoint of each intervals (mm)
+Midpt <- function (d) {
+  x=1
+  d$Midpt[x] <- (0+d$steps.x.[x])/2
+  repeat {
+    d$Midpt[x+1] <- (d$steps.x.[x]+d$steps.x.[x+1])/2
+    x = x+1
+    if (x== length(d$steps.x.)) {
+      return(d)
+      break
+    }
+  }
+}
+#Selects from ITRAX only the Midpoint present in ICPMS
+Subs.ICMPS <- function(d,dd) {
+  loc <- unique(dd$Midpoint)
+  b <- data.frame(stringsAsFactors = FALSE)
+  x=1
+  repeat {
+    d1 <- subset(d, Midpt == loc[x]) 
+    b <- rbind(b,d1) 
+    x = x+1
+    #Stop loop
+    if (x == length(loc)+1){
+      return(b)
+    }
+  }
+}
+
+
+#Removes erroneous data
+#Calculates the mahalanobis distance in multivariate space (not mine)
+mahalanobisQC <- function(spca) {
+  ss <- spca$CA$u[, 1:2]
+  maha <- sapply(1:nrow(ss), function(i) {
+    v <- matrix(1/apply(ss[-i,], 2, var), ncol=1)
+    as.vector(ss[i,]^2 %*% v)
+  })
+  names(maha) <- rownames(spca$CA$u)
+  pmaha <- 1-pchisq(maha, 2)
+  data.frame(statistic=maha, p.value=pmaha)
+}
+#Returns and plots outliers based on the mahalanobis distance in multivariate space
+pvalBri <- function(d) {
+  for (i in d) {
+    colnames(d)[which(names(d) == "position..mm.")] <- "position"
+    row.names(d) <- d$position
+    dx <- d[,-c(1,2,3,4)]
+    dx <- subset(dx, select = -c(CoreID))
+    d.pca <- rda(dx, scaling=1)
+    maha <- mahalanobisQC(d.pca)
+    maha$coreID <- d$CoreID
+    outlier <- subset(maha,p.value < 0.00005)
+    setDT(outlier, keep.rownames = TRUE)[]
+    outlier$sign.level <- 0.00005
+    dy <- d[ !(d$position %in% outlier$rn), ]
+    coord.pca <- data.frame(d.pca$CA$u[,1:2],d[2])
+    par(mfrow=c(2,2))
+    plot(coord.pca$PC1,coord.pca$PC2)
+    text(coord.pca$PC1,coord.pca$PC2,label=coord.pca$position)
+    plot(d$position,d$Ti)
+    plot(dy$position, dy$Ti)
+    print(outlier)
+    print(min(d$position))
+    print(max(d$position))
+    return(dy)
+  }
+}
+
+
+
+#Functions to vizualize ITRAX stratigraphies
+df.formatting.AGM <- function(d,j) {
+  for (i in d) {
+    d$position_mm <- seq(1,length(d$position), by=1)
+    colnames(j)[2] <- "Position_mm"
+    j$Position_mm <- seq(from=0.6, to=length(j$Position_mm)*0.6, by=0.6)
+    j$Position_mm2 <- j$Position_mm
+    dt.c <- data.table(d)
+    dt.roi <- data.table(j)
+    #Set the key for the 1st interpolation method
+    setkey(dt.c, position_mm)
+    setkey(dt.roi, Position_mm)
+    #Merging the dataset
+    dt.merged <- dt.roi[dt.c,roll="nearest"]
+    #Cleaning the dataset
+    dt.merged <- as.data.frame(dt.merged)
+    par(mfrow=c(1,2))
+    plot(dt.merged$Position_mm,dt.merged$Position_mm2)
+    dt.merged$RoiMean <- ifelse(duplicated(dt.merged$Position_mm2), NA, dt.merged$RoiMean)
+    dt.merged <- dt.merged[complete.cases(dt.merged),]
+    plot(dt.merged$Position_mm,dt.merged$Position_mm2)
+    #c_calib <- recal_density_cps(dt.merged)
+    dt.merged[,19:66] <- dt.merged[,19:66]/dt.merged$cps
+    dt.merged$Roigcm3 <- dt.merged$RoiMean*0.0005699+1.0181451
+    dt.merged[,19:66] <- dt.merged[,19:66]*dt.merged$Roigcm3
+    c_calib <- dt.merged
+    strat <- data.frame(
+      CoreID = c_calib$CoreID,
+      Density.cm3 = c_calib$Roigcm3,
+      Density.HU = c_calib$RoiMean,
+      Position = c_calib$Position_mm,
+      Cd = c_calib$Cd,
+      Zn = c_calib$Zn,
+      Cu = c_calib$Cu,
+      Al= c_calib$Al,
+      Pb = c_calib$Pb,
+      Se= c_calib$Se,
+      Ni= c_calib$Ni,
+      Ti = c_calib$Ti,
+      Inc = c_calib$Mo.inc,
+      Coh = c_calib$Mo.coh,
+      Mn = c_calib$Mn,
+      Fe = c_calib$Fe,
+      Hg = c_calib$Hg,
+      Ca = c_calib$Ca,
+      Rb = c_calib$Rb,
+      Si = c_calib$Si,
+      Sr = c_calib$Sr,
+      K = c_calib$K,
+      Zr = c_calib$Zr,
+      Br = c_calib$Br)
+    return(strat)
+  }
+} 
+#Create a dataframe from ITRAX with the desired elements to be plotted
+RatioSelectorV2 <- function(d, ratio) {
+  library(stringi)
+  b <- d[,c(1,4,2)]
+  x =1
+  repeat{
+    if(stri_detect_fixed(ratio[x], ".")=="TRUE") {
+      a <- data.frame(d[,strsplit(ratio[x], "[.]")[[1]][1]]/d[,strsplit(ratio[x], "[.]")[[1]][2]])
+      colnames(a)[1] = paste(ratio[x])
+      b <- cbind(b, a) }
+    else {
+      a <- data.frame(d[,ratio[x]])
+      colnames(a)[1] = paste(ratio[x])
+      b <- cbind(b, a) }
+    x = x + 1
+    if(x==length(ratio)+1) {
+      return(b)
+    }
+  }
+}
+#Smoothes (lowess span = 0.35) the 3rd column onward
+Smoother2 <- function(d) {
+  b <- d[,c(1,2)]
+  n = 3
+  repeat {
+    tryCatch({
+      loessModa <- loess(d[,n] ~ Position, data=d, span=0.35)
+      c <- data.frame(loessModa$fitted)
+      colnames(c)[1] = paste(colnames(d)[n])
+      b <- cbind(b, c)
+    } , error=function(e){cat(colnames(d)[n], "ERROR :",conditionMessage(e), "\n")})
+    n=n+1
+    if(n==ncol(d)+1) {
+      return(b)
+      
+    }
+  }
+}
+#Plots the stratigraphies of count and smoothed data
+Stratiplot <- function(count, smooth) {
+  myplots <- list()
+  loc <- colnames(count)[3:ncol(count)]
+  gather_count <- gather(count[,c(2:ncol(count))], variable, value, -Position)
+  gather_smooth <- gather(smooth[,c(2:ncol(smooth))], variable, value, -Position)
+  n = 1
+  repeat{
+    a <- subset(gather_count, variable == loc[n])
+    b <- subset(gather_smooth, variable == loc[n])
+    #assign(paste("Count", loc[x], sep="_"),a)
+    #print(Count_Density.cm3)
+    plot1 <- ggplot(a, aes(y = Position, x = value)) +
+      geom_path(data=b,aes(y = Position, x = value), col="red",lwd=1,alpha = 0.8) +
+      geom_path(data=a,aes(y = Position, x = value), lwd=0.75) +
+      scale_y_reverse() +
+      labs(x = NULL, y = "Position (mm)") +
+      facet_wrap(~variable) +
+      theme(text = element_text(size=15),panel.background = element_blank(), 
+            panel.grid.minor = element_line(colour = "grey80"),
+            axis.line = element_line(colour = "black"))
+    myplots[[n]] <- plot1
+    n = n +1
+    if(n == length(loc)+1) {
+      do.call("grid.arrange", c(myplots, ncol=length(loc)))
+      break
+      
+    }
+  }
+}
+
+
+
+
+
+#Example Code for Lake 06304N
+setwd("...")
+c_06304N<- read.csv("reev_ITRAX_06304N.csv")
+c_06304N$CoreID<- "c_06304N"
+ofc_06304N <- pvalBri(c_06304N)
+ofc_06304N$position_mm <- seq(1,length(ofc_06304N$position), by=1)
+ROI_06304N <- read.csv("ROI1_06304N.csv")
+ROI_06304N$Position_mm <- seq(0.6,357.6, by=0.6)
+strat_06304N.AGM <- df.formatting.AGM(ofc_06304N,ROI_08120) #Position in mm
+strat_06304N.AGM$Position <- strat_06304N.AGM$Position/10
+Ratio_Strat06304N <- RatioSelectorV2(strat_06304N.AGM,ratioPolutt)
+Smooth_RS06304N <- Smoother2(Ratio_Strat06304N)
+Stratiplot(Ratio_Strat06304N,Smooth_RS06304N)
+
